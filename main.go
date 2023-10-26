@@ -61,7 +61,7 @@ func calcHandler(w http.ResponseWriter, r *http.Request) {
 		}
 		session, err := store.Get(r, "session")
 		if err != nil {
-			http.Error(w, err.Error(), http.StatusBadRequest)
+			http.Error(w, err.Error(), http.StatusInternalServerError)
 			return
 		}
 		untypedUsername, ok := session.Values["username"]
@@ -77,41 +77,54 @@ func calcHandler(w http.ResponseWriter, r *http.Request) {
 		if !ok {
 			return
 		}
+		expressionOutput, ok := untypedExpression.(string)
+		if !ok {
+			return
+		}
 		expression, ok := untypedExpression.(string)
 		if !ok {
 			return
 		}
 		if checkString(expression) {
-			newExpression, err := govaluate.NewEvaluableExpression(expression)
-			if err != nil {
-				result, err := calculateExpression(expression)
-				if err != nil {
-					http.Error(w, err.Error(), http.StatusBadRequest)
-					return
+			newExpression, errOutput := govaluate.NewEvaluableExpression(expression)
+			if errOutput != nil {
+				if errOutput.Error() == "Invalid token: '/-'" {
+					k := strings.Count(expression, "/-")
+					expression = strings.ReplaceAll(expression, "/-", "/((-1)*")
+					for i := 0; i < k; i++ {
+						expression += ")"
+					}
+					newExpression, err = govaluate.NewEvaluableExpression(expression)
+					if err != nil {
+						http.Error(w, "Invalid expression", http.StatusBadRequest)
+						return
+					}
+					result, err := newExpression.Evaluate(nil)
+					if err != nil {
+						http.Error(w, "Invalid expression", http.StatusBadRequest)
+						return
+					}
+					session.Values["result"] = result
+				} else {
+					result, err2 := calculateExpression(expression)
+					if err2 != nil {
+						http.Error(w, "Invalid expression", http.StatusBadRequest)
+						return
+					}
+					session.Values["result"] = result
 				}
-				session.Values["result"] = result
 			} else {
 				result, err := newExpression.Evaluate(nil)
 				if err != nil {
-					http.Error(w, err.Error(), http.StatusBadRequest)
+					http.Error(w, "Invalid expression", http.StatusBadRequest)
 					return
 				}
 				session.Values["result"] = result
 			}
 		} else {
-			http.Error(w, "Wrong expression", http.StatusBadRequest)
+			http.Error(w, "Invalid expression", http.StatusBadRequest)
 			return
 		}
-		/*newExpression, err := govaluate.NewEvaluableExpression(expression)
-		if err != nil {
-			http.Error(w, err.Error(), http.StatusBadRequest)
-			return
-		}
-		result, err := newExpression.Evaluate(nil)
-		if err != nil {
-			http.Error(w, err.Error(), http.StatusBadRequest)
-			return
-		}*/
 		untypedResult, ok := session.Values["result"]
 		if !ok {
 			return
@@ -120,7 +133,7 @@ func calcHandler(w http.ResponseWriter, r *http.Request) {
 		session.Values["result"] = result
 		resultOutput := untypedResult.(float64)
 		calculations = append(calculations, Calculation{
-			Expression: expression,
+			Expression: expressionOutput,
 			Result:     resultOutput,
 			Session:    username,
 		})
@@ -128,13 +141,13 @@ func calcHandler(w http.ResponseWriter, r *http.Request) {
 		fmt.Fprintf(w, "<p>Result: %s<p>", strconv.FormatFloat(resultOutput, 'f', -1, 64)) // result output
 		err = templates.Execute(w, calculations)
 		if err != nil {
-			http.Error(w, err.Error(), http.StatusBadRequest)
+			http.Error(w, err.Error(), http.StatusInternalServerError)
 			return
 		}
 		for _, calc := range calculations {
 			if username == calc.Session {
-				fmt.Fprintf(w, "<p>%s = %s", calc.Expression, strconv.FormatFloat(calc.Result, 'f', -1, 64))                   // calc history output
-				fmt.Printf("%s = %s, key: %s\n", calc.Expression, strconv.FormatFloat(calc.Result, 'f', -1, 64), calc.Session) // bebra
+				fmt.Fprintf(w, "<p>%s = %s", calc.Expression, strconv.FormatFloat(calc.Result, 'f', -1, 64))                                                      // calc history output
+				fmt.Printf("Output: %s = %s, MathParse: %s, key: %s\n", calc.Expression, strconv.FormatFloat(calc.Result, 'f', -1, 64), expression, calc.Session) // bebra
 			}
 		}
 	}
